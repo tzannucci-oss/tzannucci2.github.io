@@ -20,7 +20,7 @@ app.use(express.static('public'));
 
 const dbResumeForge = new sqlite3.Database('./database.db');
 
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
+//const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY); //used for testing with my own emv
 const model = "gemini-3-flash-preview";
 
 // REGISTER
@@ -303,104 +303,133 @@ app.get('/api/awards/:userID', (req, res) => {
     });
 });
 
-// GENERATE RESUME
-app.post('/api/ai/generate-resume', async (req, res) => {
-    try {
-        const intUserID = req.body.userID;
-        const strTargetJob = req.body.targetJobDescription;
-        const arrJobs = req.body.jobs;
-        const arrJobDetails = req.body.jobDetails;
-        const arrSkills = req.body.skills;
-        const arrCertifications = req.body.certifications;
-        const arrAwards = req.body.awards;
+// GENERATE RESUME WITH AI
+app.post('/api/resumes/generate', async (req, res) => {
+    const intUserID = req.body.userID;
 
-        //the prompt kinda looks stupid but it works
-        const strPrompt = `
-            Create a professional one-page resume for a student.
+    const strSettingsQuery = `
+        SELECT GeminiApiKey
+        FROM tblSettings
+        WHERE UserID = ?
+        ORDER BY SettingID DESC
+        LIMIT 1
+    `;
 
-            Return ONLY the resume text.
+    dbResumeForge.get(strSettingsQuery, [intUserID], async (err, objSettings) => {
+        if (err) {
+            return res.json({ Outcome: false, Error: err.message });
+        }
 
-            Rules:
-            - Do not invent fake jobs, schools, dates, awards, certifications, or degrees.
-            - Use placeholders like [Add Phone], [Add Date], or [Add Company] if needed.
-            - Use strong action verbs.
-            - Tailor the resume to the target job description.
+        console.log("FULL SETTINGS OBJECT:", objSettings);
 
-            Use this structure:
 
-            Name / Contact Placeholder
+        if (!objSettings || !objSettings.GeminiApiKey) {
+            return res.json({
+                Outcome: false,
+                Error: 'Please save your Gemini API key before generating a resume.'
+            });
+        }
+        console.log("GEMINI KEY BEING USED:", objSettings.GeminiApiKey);
 
-            Professional Summary
+        try {
+            const strTargetJob = req.body.targetJobDescription;
+            const arrJobs = req.body.jobs;
+            const arrJobDetails = req.body.jobDetails;
+            const arrSkills = req.body.skills;
+            const arrCertifications = req.body.certifications;
+            const arrAwards = req.body.awards;
+            const genAI = new GoogleGenAI({
+                apiKey: objSettings.GeminiApiKey.trim()
+            });
+            const strPrompt = `
+                Create a professional one-page resume for a student.
 
-            Skills
+                Return ONLY the resume text.
 
-            Experience
+                Rules:
+                - Do not invent fake jobs, schools, dates, awards, certifications, or degrees.
+                - Use placeholders like [Add Phone], [Add Date], or [Add Company] if needed.
+                - Use strong action verbs.
+                - Tailor the resume to the target job description.
 
-            Education
+                Use this structure:
 
-            Certifications
+                Name / Contact Placeholder
 
-            Awards
+                Professional Summary
 
-            ---------------------------------------
+                Skills
 
-            Target Job Description:
-            ${strTargetJob}
+                Experience
 
-            Selected Jobs:
-            ${JSON.stringify(arrJobs, null, 2)}
+                Education
 
-            Selected Job Responsibilities:
-            ${JSON.stringify(arrJobDetails, null, 2)}
+                Certifications
 
-            Selected Skills:
-            ${JSON.stringify(arrSkills, null, 2)}
+                Awards
 
-            Selected Certifications:
-            ${JSON.stringify(arrCertifications, null, 2)}
+                ---------------------------------------
 
-            Selected Awards:
-            ${JSON.stringify(arrAwards, null, 2)}
+                Target Job Description:
+                ${strTargetJob}
+
+                Selected Jobs:
+                ${JSON.stringify(arrJobs, null, 2)}
+
+                Selected Job Responsibilities:
+                ${JSON.stringify(arrJobDetails, null, 2)}
+
+                Selected Skills:
+                ${JSON.stringify(arrSkills, null, 2)}
+
+                Selected Certifications:
+                ${JSON.stringify(arrCertifications, null, 2)}
+
+                Selected Awards:
+                ${JSON.stringify(arrAwards, null, 2)}
             `;
 
-        const objResponse = await genAI.models.generateContent({
-            model: model,
-            contents: strPrompt
-        });
+            const objResponse = await genAI.models.generateContent({
+                model: model,
+                contents: strPrompt
+            });
 
-        const strGeneratedResume = objResponse.text;
+            const strGeneratedResume = objResponse.text;
 
-        const strInsertQuery = `
-            INSERT INTO tblResumes
-            (UserID, JobDescription, Skills, Experience, Education, CertificationsAwards, GeneratedResume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `;
+            const strInsertQuery = `
+                INSERT INTO tblResumes
+                (UserID, JobDescription, Skills, Experience, Education, CertificationsAwards, GeneratedResume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `;
 
-        dbResumeForge.run(
-            strInsertQuery,
-            [
-                intUserID,
-                strTargetJob,
-                JSON.stringify(arrSkills),
-                JSON.stringify(arrJobs),
-                '',
-                JSON.stringify(arrCertifications) + JSON.stringify(arrAwards),
-                strGeneratedResume
-            ],
-            function (err) {
-                if (err) return res.json({ Outcome: false, Error: err.message });
+            dbResumeForge.run(
+                strInsertQuery,
+                [
+                    intUserID,
+                    strTargetJob,
+                    JSON.stringify(arrSkills),
+                    JSON.stringify(arrJobs),
+                    '',
+                    JSON.stringify(arrCertifications) + JSON.stringify(arrAwards),
+                    strGeneratedResume
+                ],
+                function (err) {
+                    if (err) {
+                        return res.json({ Outcome: false, Error: err.message });
+                    }
 
-                res.json({
-                    Outcome: true,
-                    ResumeID: this.lastID,
-                    ResumeText: strGeneratedResume
-                });
-            }
-        );
+                    res.json({
+                        Outcome: true,
+                        ResumeID: this.lastID,
+                        ResumeText: strGeneratedResume
+                    });
+                }
+            );
 
-    } catch (err) {
-        res.status(500).json({ Outcome: false, Error: err.message });
-    }
+        } catch (err) {
+            res.status(500).json({ Outcome: false, Error: err.message });
+        }
+    });
 });
 
 // GET SAVED RESUMES
